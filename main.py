@@ -1,6 +1,10 @@
+import os
 import sqlite3
 import logging
 from datetime import datetime, time
+from flask import Flask
+from threading import Thread
+
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, 
@@ -9,18 +13,30 @@ from telegram.ext import (
 
 logging.basicConfig(level=logging.INFO)
 
-# ==================== SETTINGS ====================
-BOT_TOKEN = "8879562109:AAGyIZsTQwgJMXEVvvKCrGT1FAkzXAV7WMg"
+# ==================== FLASK WEB SERVER (FOR RENDER FREE TIER) ====================
+app_flask = Flask(__name__)
 
-# 👥 Multi-Admin Support: ដាក់តែ ID របស់ Admin ពិតប្រាកដនៅទីនេះ
+@app_flask.route('/')
+def home():
+    return "Bot is running 24/7 on Render Web Service!"
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host='0.0.0.0', port=port)
+
+# ==================== SETTINGS ====================
+# ⚠️ ដើម្បីសុវត្ថិភាពខ្ពស់ អាចទាញយក BOT_TOKEN ពី Render Environment Variable បាន
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8879562109:AAGyIZsTQwgJMXEVvvKCrGT1FAkzXAV7WMg")
+
+# 👥 Multi-Admin Support: ដាក់ ID របស់ Admin នៅទីនេះ
 ADMIN_IDS = [8613183394]
 
 DB_NAME = "bot_users.db"
 WAITING_BROADCAST_MSG = 1
 
 # ⏰ កំណត់ម៉ោងធ្វើការ (៨:០០ ព្រឹក ដល់ ៥:០០ ល្ងាច)
-OFFICE_START = time(8, 0, 0)
-OFFICE_END = time(17, 0, 0)
+# OFFICE_START = time(0, 0, 0)
+# OFFICE_END = time(23, 0, 0)
 
 # 🤖 Auto-Reply Keywords Dictionary
 KEYWORDS_REPLY = {
@@ -123,7 +139,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
     else:
-        # Inline Keyboard សម្រាប់ User មើលទៅកាន់តែស្អាត
         inline_keyboard = [
             [
                 InlineKeyboardButton("🏷️ តារាងតម្លៃ", callback_data="info_price"),
@@ -148,7 +163,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
 
-# 🔘 Inline Keyboard Callbacks
 async def inline_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -156,17 +170,16 @@ async def inline_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE
     if query.data == "info_price":
         text = "🏷️ **តារាងតម្លៃសេវាកម្ម៖**\n\n• សេវាកម្ម A: $10\n• សេវាកម្ម B: $20\n• សេវាកម្ម C: $30"
     elif query.data == "info_location":
-        text = "📍 **ទីតាំងរបស់យើង៖**\nរាជធានីភ្នំពេញ, ប្រទេសកម្ពុជា។"
+        text = "📍 **ទីតាំងរបស់យើង៖**\nរាជធានីភ្នំពេញ, ប្រទេសកម្ពុជា focus"
     elif query.data == "info_contact":
         text = "📞 **ព័ត៌មានទំនាក់ទំនង៖**\n• ទូរស័ព្ទ៖ 012 345 678 / 098 765 432\n• Telegram: @admin"
     elif query.data == "info_ask":
-        text = "💬 **សូមវាយបញ្ជូនសារ ឬសំណួររបស់អ្នកមកកាន់ទីនេះ!**\nក្រុមការងារយើងខ្ញុំនឹងឆ្លើយតបទៅវិញក្នុងពេលឆាប់ៗ។"
+        text = "💬 **សូមវាយបញ្ជូនសារ ឬសំណួររបស់អ្នកមកកាន់ទីនេះ!**\nក្រុមការងារយើងខ្ញុំនឹងឆ្លើយតបទៅវិញក្នុងពេលឆាប់ៗ"
     else:
         return
 
     await query.message.reply_text(text, parse_mode="Markdown")
 
-# 📊 Show Stats
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
@@ -182,7 +195,6 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(stats_msg, parse_mode="Markdown")
 
-# 📢 Broadcast Handlers
 async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("⚠️ មុខងារនេះសម្រាប់តែ Admin ប៉ុណ្ណោះ!", reply_markup=ReplyKeyboardRemove())
@@ -232,7 +244,6 @@ async def cancel_broadcast_callback(update: Update, context: ContextTypes.DEFAUL
     await query.edit_message_text("❌ បានបោះបង់ការ Broadcast រួចរាល់!")
     return ConversationHandler.END
 
-# 💬 Admin Reply Handler (គាំទ្រ Text & Media)
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -266,11 +277,9 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 return True
     return False
 
-# 📩 User Message Handler
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    # ប្រសិនបើជា Admin
     if user.id in ADMIN_IDS:
         if update.message.text == "📊 ស្ថិតិប្រព័ន្ធ":
             await show_stats(update, context)
@@ -279,7 +288,6 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         if is_handled:
             return
 
-    # ប្រសិនបើ User ធម្មតាចុច/វាយប៊ូតុងរបស់ Admin ត្រូវបដិសេធ
     if update.message.text in ["📢 ផ្ញើសារប្រកាស (Broadcast)", "📊 ស្ថិតិប្រព័ន្ធ"]:
         await update.message.reply_text(
             "⚠️ មុខងារនេះសម្រាប់តែ Admin ប៉ុណ្ណោះ!",
@@ -289,7 +297,6 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     add_or_update_user(user.id, user.first_name, user.username)
 
-    # 🤖 Auto-Reply Keyword Check
     user_text = update.message.text.strip().lower() if update.message.text else ""
     keyword_matched = False
 
@@ -302,7 +309,6 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         if keyword_matched:
             break
 
-    # 👥 ផ្ញើសារចូលទៅ Admin ទាំងអស់
     username_str = f"@{user.username}" if user.username else "គ្មាន"
     for admin_id in ADMIN_IDS:
         try:
@@ -331,7 +337,6 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception:
             pass
 
-    # ⏰ Office Hours Auto-Reply
     if not keyword_matched and not is_replied_status(user.id):
         now_time = datetime.now().time()
         if OFFICE_START <= now_time <= OFFICE_END:
@@ -344,9 +349,15 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ==================== MAIN ====================
 
 if __name__ == '__main__':
+    # ១. បង្កើត និងរៀបចំ Database
     init_db()
     
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # ២. រត់ Flask Web Server លើ Thread ដាច់ដោយឡែក (ដើម្បីឱ្យ Render ស្គាល់ Web Port)
+    server_thread = Thread(target=run_web_server, daemon=True)
+    server_thread.start()
+    
+    # ៣. កំណត់ Telegram Bot
+    bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     broadcast_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('^📢 ផ្ញើសារប្រកាស \(Broadcast\)$'), start_broadcast)],
@@ -359,11 +370,11 @@ if __name__ == '__main__':
         fallbacks=[CallbackQueryHandler(cancel_broadcast_callback, pattern="^cancel_broadcast$")]
     )
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", show_stats))
-    app.add_handler(broadcast_handler)
-    app.add_handler(CallbackQueryHandler(inline_button_click, pattern="^info_"))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
+    bot_app.add_handler(CommandHandler("start", start))
+    bot_app.add_handler(CommandHandler("stats", show_stats))
+    bot_app.add_handler(broadcast_handler)
+    bot_app.add_handler(CallbackQueryHandler(inline_button_click, pattern="^info_"))
+    bot_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
     
-    print("🚀 Bot កំពុងដំណើរការ...")
-    app.run_polling()
+    print("🚀 Bot និង Web Server កំពុងដំណើរការ...")
+    bot_app.run_polling()

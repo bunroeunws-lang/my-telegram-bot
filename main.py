@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import logging
-from datetime import datetime, time
+from datetime import datetime
 from flask import Flask
 from threading import Thread
 
@@ -32,10 +32,6 @@ ADMIN_IDS = [8613183394]
 
 DB_NAME = "bot_users.db"
 WAITING_BROADCAST_MSG = 1
-
-# ⏰ កំណត់ម៉ោងធ្វើការ (៨:០០ ព្រឹក ដល់ ៥:០០ ល្ងាច)
-# OFFICE_START = time(8, 0, 0)
-# OFFICE_END = time(17, 0, 0)
 
 # 🤖 Auto-Reply Keywords Dictionary
 KEYWORDS_REPLY = {
@@ -165,7 +161,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         await update.message.reply_text(
             f"👑 **សួស្តី Admin {user.first_name}!**\n\n"
-            f"សូមជ្រើសរើសផ្ទាំងបញ្ជាខាងក្រោមសម្រាប់គ្រប់គ្រងប្រព័ន្ធ៖",
+            f"សូមជ្រើសរើសផ្ទាំងបញ្ជាខាងក្រោមសម្រាប់គ្រប់គ្រងប្រព័ន្ធ ឬវាយ `/admin` ដើម្បីបើក Menu Panel៖",
             parse_mode="Markdown",
             reply_markup=reply_markup
         )
@@ -193,6 +189,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
 
+# ADMIN CONTROL PANEL
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("📦 ទាញយក Database (Backup)", callback_data="download_backup")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "⚙️ **Admin Control Panel**\nសូមជ្រើសរើសមុខងារខាងក្រោម៖",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
 async def inline_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if is_user_blocked(query.from_user.id):
@@ -200,14 +213,58 @@ async def inline_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await query.answer()
 
-    if query.data == "info_price":
-        text = "🏷️ **តារាងតម្លៃសេវាកម្ម៖**\n\n• សេវាកម្ម A: $10\n• សេវាកម្ម B: $20\n• សេវាកម្ម C: $30"
-    elif query.data == "info_contact":
+    if query.data == "info_contact":
         text = "📞 **ព័ត៌មានទំនាក់ទំនង៖**\n• ទូរស័ព្ទ៖ 012 345 678 / 098 765 432\n• Telegram: @admin"
     else:
         return
 
     await query.message.reply_text(text, parse_mode="Markdown")
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    if is_user_blocked(user_id):
+        return
+
+    await query.answer()
+
+    # 1. Handle Inline Info Buttons
+    if query.data.startswith("info_"):
+        if query.data == "info_contact":
+            text = "📞 **ព័ត៌មានទំនាក់ទំនង៖**\n• ទូរស័ព្ទ៖ 012 345 678 / 098 765 432\n• Telegram: @admin"
+        else:
+            return
+        await query.message.reply_text(text, parse_mode="Markdown")
+
+    # 2. Handle Block User via Inline Button
+    elif query.data.startswith("block_"):
+        if user_id not in ADMIN_IDS:
+            return
+        target_id = int(query.data.split("_")[1])
+        block_user_db(target_id)
+        await query.edit_message_text(
+            text=f"{query.message.text}\n\n🚫 **[Admin បាន Block User នេះរួចរាល់]**",
+            parse_mode="Markdown"
+        )
+
+    # 3. Handle Download Database Backup Button
+    elif query.data == "download_backup":
+        if user_id not in ADMIN_IDS:
+            return
+        if not os.path.exists(DB_NAME):
+            await query.message.reply_text("❌ រកមិនឃើញ File Database ឡើយ!")
+            return
+
+        try:
+            with open(DB_NAME, "rb") as db_file:
+                await context.bot.send_document(
+                    chat_id=user_id,
+                    document=db_file,
+                    caption="📦 **File Database (Backup)**\nទិន្នន័យ User ទាំងអស់ត្រូវបាន Backup រួចរាល់!"
+                )
+        except Exception as e:
+            await query.message.reply_text(f"❌ កើតមានបញ្ហា៖ {e}")
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
@@ -373,6 +430,12 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             break
 
     username_str = f"@{user.username}" if user.username else "គ្មាន"
+    
+    # Inline Keyboard ភ្ជាប់ប៊ូតុង Block User សម្រាប់ផ្ញើទៅ Admin
+    block_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚫 Block User នេះ", callback_data=f"block_{user.id}")]
+    ])
+
     for admin_id in ADMIN_IDS:
         try:
             if update.message.text:
@@ -382,7 +445,12 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     f"🆔 ID: `{user.id}`\n\n"
                     f"💬 **សារ៖** {update.message.text}"
                 )
-                await context.bot.send_message(chat_id=admin_id, text=combined_text, parse_mode="Markdown")
+                await context.bot.send_message(
+                    chat_id=admin_id, 
+                    text=combined_text, 
+                    parse_mode="Markdown",
+                    reply_markup=block_markup
+                )
             else:
                 caption_text = (
                     f"📩 **សារថ្មីចូល (Media)!**\n"
@@ -395,18 +463,14 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     from_chat_id=update.effective_chat.id,
                     message_id=update.message.message_id,
                     caption=caption_text,
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    reply_markup=block_markup
                 )
         except Exception:
             pass
 
     if not keyword_matched and not is_replied_status(user.id):
-        now_time = datetime.now().time()
-        if OFFICE_START <= now_time <= OFFICE_END:
-            auto_msg = "📥 ទទួលបានសាររបស់អ្នកហើយ! ក្រុមការងារនឹងឆ្លើយតបក្នុងពេលឆាប់ៗ។"
-        else:
-            auto_msg = "🌙 បច្ចុប្បន្នជាពេលក្រៅម៉ោងធ្វើការ។ ក្រុមការងារនឹងពិនិត្យ និងឆ្លើយតបសាររបស់អ្នកនៅព្រឹកស្អែក!"
-            
+        auto_msg = "📥 ទទួលបានសាររបស់អ្នកហើយ! ក្រុមការងារនឹងឆ្លើយតបក្នុងពេលឆាប់ៗ។"
         await update.message.reply_text(auto_msg)
 
 # ==================== MAIN ====================
@@ -431,11 +495,14 @@ if __name__ == '__main__':
     )
 
     bot_app.add_handler(CommandHandler("start", start))
+    bot_app.add_handler(CommandHandler("admin", admin_panel))
     bot_app.add_handler(CommandHandler("stats", show_stats))
     bot_app.add_handler(CommandHandler("block", block_command))
     bot_app.add_handler(CommandHandler("unblock", unblock_command))
     bot_app.add_handler(broadcast_handler)
-    bot_app.add_handler(CallbackQueryHandler(inline_button_click, pattern="^info_"))
+    
+    # Callback Query Handler សម្រាប់ចាប់ប៊ូតុងទាំងអស់
+    bot_app.add_handler(CallbackQueryHandler(callback_handler))
     bot_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
     
     print("🚀 Bot និង Web Server កំពុងដំណើរការ...")

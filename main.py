@@ -25,7 +25,7 @@ def run_web_server():
     app_flask.run(host='0.0.0.0', port=port)
 
 # ==================== SETTINGS ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8879562109:AAGyIZsTQwgJMXEVvvKCrGT1FAkzXAV7WMg")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8879562109:AAEcmze51iluEkaLTPBjyy7qcUk7By6gQlQ")
 
 # 👥 Multi-Admin Support
 ADMIN_IDS = [8613183394]

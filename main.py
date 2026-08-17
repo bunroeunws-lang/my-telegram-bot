@@ -1,9 +1,9 @@
 import os
-import sqlite3
 import logging
 from datetime import datetime
 from flask import Flask
 from threading import Thread
+import psycopg2
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -13,12 +13,12 @@ from telegram.ext import (
 
 logging.basicConfig(level=logging.INFO)
 
-# ==================== FLASK WEB SERVER (FOR RENDER FREE TIER) ====================
+# ==================== FLASK WEB SERVER ====================
 app_flask = Flask(__name__)
 
 @app_flask.route('/')
 def home():
-    return "Bot is running 24/7 on Render Web Service!"
+    return "Bot is running 24/7!"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -26,124 +26,125 @@ def run_web_server():
 
 # ==================== SETTINGS ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8879562109:AAEcmze51iluEkaLTPBjyy7qcUk7By6gQlQ")
+DATABASE_URL = os.environ.get("DATABASE_URL") # ដាក់ URL របស់ Render PostgreSQL ក្នុង Environment Variable
 
-# 👥 Multi-Admin Support
 ADMIN_IDS = [8613183394]
-
-DB_NAME = "bot_users.db"
 WAITING_BROADCAST_MSG = 1
 
-# 🤖 Auto-Reply Keywords Dictionary
 KEYWORDS_REPLY = {
     ("លេខទូរស័ព្ទ", "លេខ", "លេខទំនាក់ទំនង", "ចង់បើក"): "📞 **ទំនាក់ទំនង៖** 012 345 678 / 098 765 432",
     ("contact", "phone number", "number", "phone"): "📞 **Contact:** 012 345 678 / 098 765 432"
 }
 
-# ==================== DATABASE ====================
+# ==================== DATABASE (POSTGRESQL) ====================
+def get_db_connection():
+    return psycopg2.connect(DATABASE_URL)
+
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    if not DATABASE_URL:
+        print("⚠️ មិនទាន់កំណត់ DATABASE_URL នៅក្នុង Environment Variables ទេ!")
+        return
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
+            user_id BIGINT PRIMARY KEY,
             first_name TEXT,
             username TEXT,
-            is_replied INTEGER DEFAULT 0,
-            is_blocked INTEGER DEFAULT 0,
+            is_replied INT DEFAULT 0,
+            is_blocked INT DEFAULT 0,
             last_active TIMESTAMP,
-            message_count INTEGER DEFAULT 0
+            message_count INT DEFAULT 0
         )
     ''')
     conn.commit()
+    cursor.close()
     conn.close()
 
 def add_or_update_user(user_id, first_name, username):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     now = datetime.now()
     
-    cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
-    row = cursor.fetchone()
-    
-    if row:
-        cursor.execute('''
-            UPDATE users 
-            SET first_name = ?, username = ?, last_active = ?, message_count = message_count + 1 
-            WHERE user_id = ?
-        ''', (first_name, username, now, user_id))
-    else:
-        cursor.execute('''
-            INSERT INTO users (user_id, first_name, username, is_replied, is_blocked, last_active, message_count)
-            VALUES (?, ?, ?, 0, 0, ?, 1)
-        ''', (user_id, first_name, username, now))
+    cursor.execute('''
+        INSERT INTO users (user_id, first_name, username, is_replied, is_blocked, last_active, message_count)
+        VALUES (%s, %s, %s, 0, 0, %s, 1)
+        ON CONFLICT (user_id) DO UPDATE SET
+            first_name = EXCLUDED.first_name,
+            username = EXCLUDED.username,
+            last_active = EXCLUDED.last_active,
+            message_count = users.message_count + 1
+    ''', (user_id, first_name, username, now))
         
     conn.commit()
+    cursor.close()
     conn.close()
 
 def block_user_db(user_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('UPDATE users SET is_blocked = 1 WHERE user_id = ?', (user_id,))
+    cursor.execute('UPDATE users SET is_blocked = 1 WHERE user_id = %s', (user_id,))
     conn.commit()
+    cursor.close()
     conn.close()
 
 def unblock_user_db(user_id: int):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('UPDATE users SET is_blocked = 0 WHERE user_id = ?', (user_id,))
+    cursor.execute('UPDATE users SET is_blocked = 0 WHERE user_id = %s', (user_id,))
     conn.commit()
+    cursor.close()
     conn.close()
 
 def is_user_blocked(user_id: int) -> bool:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    try:
-        cursor.execute('ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0')
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-        
-    cursor.execute('SELECT is_blocked FROM users WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT is_blocked FROM users WHERE user_id = %s', (user_id,))
     row = cursor.fetchone()
+    cursor.close()
     conn.close()
     return bool(row[0]) if row and row[0] else False
 
 def set_replied_status(user_id, status: bool):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('UPDATE users SET is_replied = ? WHERE user_id = ?', (1 if status else 0, user_id))
+    cursor.execute('UPDATE users SET is_replied = %s WHERE user_id = %s', (1 if status else 0, user_id))
     conn.commit()
+    cursor.close()
     conn.close()
 
 def is_replied_status(user_id) -> bool:
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT is_replied FROM users WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT is_replied FROM users WHERE user_id = %s', (user_id,))
     row = cursor.fetchone()
+    cursor.close()
     conn.close()
     return bool(row[0]) if row else False
 
 def get_all_users():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT user_id FROM users WHERE is_blocked = 0')
     rows = cursor.fetchall()
+    cursor.close()
     conn.close()
     return [row[0] for row in rows]
 
 def get_stats():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     cursor.execute('SELECT COUNT(*) FROM users')
     total_users = cursor.fetchone()[0]
     
-    cursor.execute("SELECT COUNT(*) FROM users WHERE datetime(last_active) >= datetime('now', '-1 day')")
+    cursor.execute("SELECT COUNT(*) FROM users WHERE last_active >= NOW() - INTERVAL '1 DAY'")
     active_24h = cursor.fetchone()[0]
     
     cursor.execute('SELECT SUM(message_count) FROM users')
     total_messages = cursor.fetchone()[0] or 0
     
+    cursor.close()
     conn.close()
     return total_users, active_24h, total_messages
 
@@ -160,8 +161,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [["📢 ផ្ញើសារប្រកាស (Broadcast)", "📊 ស្ថិតិប្រព័ន្ធ"]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         await update.message.reply_text(
-            f"👑 **សួស្តី Admin {user.first_name}!**\n\n"
-            f"សូមជ្រើសរើសផ្ទាំងបញ្ជាខាងក្រោមសម្រាប់គ្រប់គ្រងប្រព័ន្ធ ឬវាយ `/admin` ដើម្បីបើក Menu Panel៖",
+            f"👑 **សួស្តី Admin {user.first_name}!**",
             parse_mode="Markdown",
             reply_markup=reply_markup
         )
@@ -173,47 +173,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(inline_keyboard)
 
-        welcome_text = (
-            f"👋 **ជម្រាបសួរ {user.first_name}!**\n\n"
-            f"សូមស្វាគមន៍មកកាន់ប្រព័ន្ធទំនាក់ទំនងរបស់យើងខ្ញុំ! 🤖\n\n"
-        )
-
-        await update.message.reply_text(
-            welcome_text,
-            parse_mode="Markdown",
-            reply_markup=reply_markup
-        )
-
-# ADMIN CONTROL PANEL
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
-        return
-
-    keyboard = [
-        [InlineKeyboardButton("📦 ទាញយក Database (Backup)", callback_data="download_backup")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        "⚙️ **Admin Control Panel**\nសូមជ្រើសរើសមុខងារខាងក្រោម៖",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
-
-async def inline_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if is_user_blocked(query.from_user.id):
-        return
-
-    await query.answer()
-
-    if query.data == "info_contact":
-        text = "📞 **ព័ត៌មានទំនាក់ទំនង៖**\n• ទូរស័ព្ទ៖ 012 345 678 / 098 765 432\n• Telegram: @admin"
-    else:
-        return
-
-    await query.message.reply_text(text, parse_mode="Markdown")
+        welcome_text = f"👋 **ជម្រាបសួរ {user.first_name}!**\n\nសូមស្វាគមន៍មកកាន់ប្រព័ន្ធទំនាក់ទំនងរបស់យើងខ្ញុំ! 🤖"
+        await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=reply_markup)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -224,7 +185,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
-    # 1. Handle Inline Info Buttons
     if query.data.startswith("info_"):
         if query.data == "info_contact":
             text = "📞 **ព័ត៌មានទំនាក់ទំនង៖**\n• ទូរស័ព្ទ៖ 012 345 678 / 098 765 432\n• Telegram: @admin"
@@ -232,7 +192,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await query.message.reply_text(text, parse_mode="Markdown")
 
-    # 2. Handle Block User via Inline Button
     elif query.data.startswith("block_"):
         if user_id not in ADMIN_IDS:
             return
@@ -242,24 +201,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=f"{query.message.text}\n\n🚫 **[Admin បាន Block User នេះរួចរាល់]**",
             parse_mode="Markdown"
         )
-
-    # 3. Handle Download Database Backup Button
-    elif query.data == "download_backup":
-        if user_id not in ADMIN_IDS:
-            return
-        if not os.path.exists(DB_NAME):
-            await query.message.reply_text("❌ រកមិនឃើញ File Database ឡើយ!")
-            return
-
-        try:
-            with open(DB_NAME, "rb") as db_file:
-                await context.bot.send_document(
-                    chat_id=user_id,
-                    document=db_file,
-                    caption="📦 **File Database (Backup)**\nទិន្នន័យ User ទាំងអស់ត្រូវបាន Backup រួចរាល់!"
-                )
-        except Exception as e:
-            await query.message.reply_text(f"❌ កើតមានបញ្ហា៖ {e}")
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
@@ -276,7 +217,6 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(stats_msg, parse_mode="Markdown")
 
-# 🚫 BLOCK COMMAND
 async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
@@ -291,7 +231,6 @@ async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("⚠️ **សូមបញ្ជាក់ ID!** ឧទាហរណ៍៖ `/block 123456789`", parse_mode="Markdown")
 
-# ✅ UNBLOCK COMMAND
 async def unblock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
@@ -391,7 +330,6 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    # 🛑 ឆែកមើលថា User ត្រូវ Block ដែរឬទេ
     if is_user_blocked(user.id):
         return
 
@@ -425,8 +363,6 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             break
 
     username_str = f"@{user.username}" if user.username else "គ្មាន"
-    
-    # Inline Keyboard ភ្ជាប់ប៊ូតុង Block User សម្រាប់ផ្ញើទៅ Admin
     block_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("🚫 Block User នេះ", callback_data=f"block_{user.id}")]
     ])
@@ -465,7 +401,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             pass
 
     if not keyword_matched and not is_replied_status(user.id):
-        auto_msg = "📥 ទទួលបានសាររបស់អ្នកហើយ! ក្រុមការងារនឹងឆ្លើយតបក្នុងពេលឆាប់ៗ។"
+        auto_msg = "📥 ទទួលបានសាររបស់អ្នកហើយ! ក្រុមការងារនឹងឆ្លើយតបក្នុងពេលឆាប់ៗ"
         await update.message.reply_text(auto_msg)
 
 # ==================== MAIN ====================
@@ -490,13 +426,10 @@ if __name__ == '__main__':
     )
 
     bot_app.add_handler(CommandHandler("start", start))
-    bot_app.add_handler(CommandHandler("admin", admin_panel))
     bot_app.add_handler(CommandHandler("stats", show_stats))
     bot_app.add_handler(CommandHandler("block", block_command))
     bot_app.add_handler(CommandHandler("unblock", unblock_command))
     bot_app.add_handler(broadcast_handler)
-    
-    # Callback Query Handler សម្រាប់ចាប់ប៊ូតុងទាំងអស់
     bot_app.add_handler(CallbackQueryHandler(callback_handler))
     bot_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
     

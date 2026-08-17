@@ -168,12 +168,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         inline_keyboard = [
             [
-                InlineKeyboardButton("🏷️ តារាងតម្លៃ", callback_data="info_price"),
-                InlineKeyboardButton("📍 ទីតាំង", callback_data="info_location")
-            ],
-            [
                 InlineKeyboardButton("📞 ទំនាក់ទំនង", callback_data="info_contact"),
-                InlineKeyboardButton("💬 ផ្ញើសារសាកសួរ", callback_data="info_ask")
             ]
         ]
         reply_markup = InlineKeyboardMarkup(inline_keyboard)

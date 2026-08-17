@@ -185,7 +185,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome_text = (
             f"👋 **ជម្រាបសួរ {user.first_name}!**\n\n"
             f"សូមស្វាគមន៍មកកាន់ប្រព័ន្ធទំនាក់ទំនងរបស់យើងខ្ញុំ! 🤖\n\n"
-            f"លោកអ្នកអាចជ្រើសរើសព័ត៌មានរហ័សខាងក្រោម ឬវាយបញ្ជូនសារ/សំណួរមកកាន់យើងខ្ញុំដោយផ្ទាល់បាន។"
         )
 
         await update.message.reply_text(
@@ -203,12 +202,8 @@ async def inline_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if query.data == "info_price":
         text = "🏷️ **តារាងតម្លៃសេវាកម្ម៖**\n\n• សេវាកម្ម A: $10\n• សេវាកម្ម B: $20\n• សេវាកម្ម C: $30"
-    elif query.data == "info_location":
-        text = "📍 **ទីតាំងរបស់យើង៖**\nរាជធានីភ្នំពេញ, ប្រទេសកម្ពុជា"
     elif query.data == "info_contact":
         text = "📞 **ព័ត៌មានទំនាក់ទំនង៖**\n• ទូរស័ព្ទ៖ 012 345 678 / 098 765 432\n• Telegram: @admin"
-    elif query.data == "info_ask":
-        text = "💬 **សូមវាយបញ្ជូនសារ ឬសំណួររបស់អ្នកមកកាន់ទីនេះ!**\nក្រុមការងារយើងខ្ញុំនឹងឆ្លើយតបទៅវិញក្នុងពេលឆាប់ៗ"
     else:
         return
 

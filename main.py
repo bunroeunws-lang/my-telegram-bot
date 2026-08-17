@@ -25,18 +25,17 @@ def run_web_server():
     app_flask.run(host='0.0.0.0', port=port)
 
 # ==================== SETTINGS ====================
-# ⚠️ ដើម្បីសុវត្ថិភាពខ្ពស់ អាចទាញយក BOT_TOKEN ពី Render Environment Variable បាន
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8879562109:AAGyIZsTQwgJMXEVvvKCrGT1FAkzXAV7WMg")
 
-# 👥 Multi-Admin Support: ដាក់ ID របស់ Admin នៅទីនេះ
+# 👥 Multi-Admin Support
 ADMIN_IDS = [8613183394]
 
 DB_NAME = "bot_users.db"
 WAITING_BROADCAST_MSG = 1
 
 # ⏰ កំណត់ម៉ោងធ្វើការ (៨:០០ ព្រឹក ដល់ ៥:០០ ល្ងាច)
-# OFFICE_START = time(0, 0, 0)
-# OFFICE_END = time(23, 0, 0)
+# OFFICE_START = time(8, 0, 0)
+# OFFICE_END = time(17, 0, 0)
 
 # 🤖 Auto-Reply Keywords Dictionary
 KEYWORDS_REPLY = {
@@ -54,6 +53,7 @@ def init_db():
             first_name TEXT,
             username TEXT,
             is_replied INTEGER DEFAULT 0,
+            is_blocked INTEGER DEFAULT 0,
             last_active TIMESTAMP,
             message_count INTEGER DEFAULT 0
         )
@@ -77,12 +77,40 @@ def add_or_update_user(user_id, first_name, username):
         ''', (first_name, username, now, user_id))
     else:
         cursor.execute('''
-            INSERT INTO users (user_id, first_name, username, is_replied, last_active, message_count)
-            VALUES (?, ?, ?, 0, ?, 1)
+            INSERT INTO users (user_id, first_name, username, is_replied, is_blocked, last_active, message_count)
+            VALUES (?, ?, ?, 0, 0, ?, 1)
         ''', (user_id, first_name, username, now))
         
     conn.commit()
     conn.close()
+
+def block_user_db(user_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('UPDATE users SET is_blocked = 1 WHERE user_id = ?', (user_id,))
+    conn.commit()
+    conn.close()
+
+def unblock_user_db(user_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('UPDATE users SET is_blocked = 0 WHERE user_id = ?', (user_id,))
+    conn.commit()
+    conn.close()
+
+def is_user_blocked(user_id: int) -> bool:
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0')
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+        
+    cursor.execute('SELECT is_blocked FROM users WHERE user_id = ?', (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row[0]) if row and row[0] else False
 
 def set_replied_status(user_id, status: bool):
     conn = sqlite3.connect(DB_NAME)
@@ -102,7 +130,7 @@ def is_replied_status(user_id) -> bool:
 def get_all_users():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('SELECT user_id FROM users')
+    cursor.execute('SELECT user_id FROM users WHERE is_blocked = 0')
     rows = cursor.fetchall()
     conn.close()
     return [row[0] for row in rows]
@@ -127,6 +155,9 @@ def get_stats():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    if is_user_blocked(user.id):
+        return
+
     add_or_update_user(user.id, user.first_name, user.username)
 
     if user.id in ADMIN_IDS:
@@ -165,12 +196,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def inline_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if is_user_blocked(query.from_user.id):
+        return
+
     await query.answer()
 
     if query.data == "info_price":
         text = "🏷️ **តារាងតម្លៃសេវាកម្ម៖**\n\n• សេវាកម្ម A: $10\n• សេវាកម្ម B: $20\n• សេវាកម្ម C: $30"
     elif query.data == "info_location":
-        text = "📍 **ទីតាំងរបស់យើង៖**\nរាជធានីភ្នំពេញ, ប្រទេសកម្ពុជា focus"
+        text = "📍 **ទីតាំងរបស់យើង៖**\nរាជធានីភ្នំពេញ, ប្រទេសកម្ពុជា"
     elif query.data == "info_contact":
         text = "📞 **ព័ត៌មានទំនាក់ទំនង៖**\n• ទូរស័ព្ទ៖ 012 345 678 / 098 765 432\n• Telegram: @admin"
     elif query.data == "info_ask":
@@ -194,6 +228,36 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"━━━━━━━━━━━━━━━━━━━"
     )
     await update.message.reply_text(stats_msg, parse_mode="Markdown")
+
+# 🚫 BLOCK COMMAND
+async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    if context.args:
+        try:
+            target_id = int(context.args[0])
+            block_user_db(target_id)
+            await update.message.reply_text(f"🚫 **បាន Block User ID:** `{target_id}` រួចរាល់!", parse_mode="Markdown")
+        except ValueError:
+            await update.message.reply_text("⚠️ **ទម្រង់ខុស!** ឧទាហរណ៍៖ `/block 123456789`", parse_mode="Markdown")
+    else:
+        await update.message.reply_text("⚠️ **សូមបញ្ជាក់ ID!** ឧទាហរណ៍៖ `/block 123456789`", parse_mode="Markdown")
+
+# ✅ UNBLOCK COMMAND
+async def unblock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    if context.args:
+        try:
+            target_id = int(context.args[0])
+            unblock_user_db(target_id)
+            await update.message.reply_text(f"✅ **បាន Unblock User ID:** `{target_id}` រួចរាល់!", parse_mode="Markdown")
+        except ValueError:
+            await update.message.reply_text("⚠️ **ទម្រង់ខុស!** ឧទាហរណ៍៖ `/unblock 123456789`", parse_mode="Markdown")
+    else:
+        await update.message.reply_text("⚠️ **សូមបញ្ជាក់ ID!** ឧទាហរណ៍៖ `/unblock 123456789`", parse_mode="Markdown")
 
 async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
@@ -280,6 +344,10 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
+    # 🛑 ឆែកមើលថា User ត្រូវ Block ដែរឬទេ
+    if is_user_blocked(user.id):
+        return
+
     if user.id in ADMIN_IDS:
         if update.message.text == "📊 ស្ថិតិប្រព័ន្ធ":
             await show_stats(update, context)
@@ -349,14 +417,11 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ==================== MAIN ====================
 
 if __name__ == '__main__':
-    # ១. បង្កើត និងរៀបចំ Database
     init_db()
     
-    # ២. រត់ Flask Web Server លើ Thread ដាច់ដោយឡែក (ដើម្បីឱ្យ Render ស្គាល់ Web Port)
     server_thread = Thread(target=run_web_server, daemon=True)
     server_thread.start()
     
-    # ៣. កំណត់ Telegram Bot
     bot_app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     broadcast_handler = ConversationHandler(
@@ -372,6 +437,8 @@ if __name__ == '__main__':
 
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(CommandHandler("stats", show_stats))
+    bot_app.add_handler(CommandHandler("block", block_command))
+    bot_app.add_handler(CommandHandler("unblock", unblock_command))
     bot_app.add_handler(broadcast_handler)
     bot_app.add_handler(CallbackQueryHandler(inline_button_click, pattern="^info_"))
     bot_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))

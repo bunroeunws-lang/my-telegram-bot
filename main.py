@@ -51,7 +51,6 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Table សម្រាប់រក្សាទុក User ធម្មតា
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
@@ -64,14 +63,12 @@ def init_db():
         )
     ''')
     
-    # Table សម្រាប់រក្សាទុក Admin IDs
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS admins (
             admin_id BIGINT PRIMARY KEY
         )
     ''')
     
-    # បញ្ចូល Owner ID ចូល Database ស្វ័យប្រវត្តិ
     cursor.execute('''
         INSERT INTO admins (admin_id) VALUES (%s)
         ON CONFLICT (admin_id) DO NOTHING
@@ -201,7 +198,22 @@ async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             new_admin_id = int(context.args[0])
             add_admin_db(new_admin_id)
+            
+            # ១. ផ្ញើសារប្រាប់ Admin ដែលជាអ្នកបន្ថែម
             await update.message.reply_text(f"✅ **បានបន្ថែម Admin ថ្មីជោគជ័យ!**\nID: `{new_admin_id}`", parse_mode="Markdown")
+            
+            # ២. ផ្ញើសារ និងលោតប៊ូតុង Menu ទៅកាន់ Admin ថ្មីដោយស្វ័យប្រវត្តិ
+            keyboard = [["📢 ផ្ញើសារប្រកាស (Broadcast)", "📊 ស្ថិតិប្រព័ន្ធ"]]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            try:
+                await context.bot.send_message(
+                    chat_id=new_admin_id,
+                    text="🎉 **អ្នកត្រូវបានស្ថាបនិកបន្ថែមជា Admin រួចរាល់ហើយ!**\nឥឡូវនេះអ្នកអាចទទួលសារពី User និងគ្រប់គ្រងប្រព័ន្ធបាន។",
+                    reply_markup=reply_markup,
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
         except ValueError:
             await update.message.reply_text("⚠️ **ទម្រង់ខុស!** ឧទាហរណ៍៖ `/addadmin 123456789`", parse_mode="Markdown")
     else:
@@ -216,8 +228,23 @@ async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
             if target_id == OWNER_ID:
                 await update.message.reply_text("❌ មិនអាចលុប Owner ID បានទេ!")
                 return
+            
+            # ១. លុបចេញពី Database
             remove_admin_db(target_id)
+            
+            # ២. ផ្ញើសារប្រាប់ Admin ដែលជាអ្នកលុប
             await update.message.reply_text(f"🗑️ **បានលុប Admin ID:** `{target_id}` រួចរាល់!", parse_mode="Markdown")
+            
+            # ៣. ផ្ញើសារទៅលុបប៊ូតុង Admin ចេញពី Chat របស់គេភ្លាមៗ
+            try:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text="❌ **សិទ្ធិជា Admin របស់អ្នកត្រូវបានដកហូតវិញហើយ!**",
+                    reply_markup=ReplyKeyboardRemove(),
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
         except ValueError:
             await update.message.reply_text("⚠️ **ទម្រង់ខុស!** ឧទាហរណ៍៖ `/deladmin 123456789`", parse_mode="Markdown")
     else:

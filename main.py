@@ -13,28 +13,32 @@ from telegram.ext import (
 
 logging.basicConfig(level=logging.INFO)
 
-# ==================== FLASK WEB SERVER ====================
-app_flask = Flask(__name__)
-
-@app_flask.route('/')
-def home():
-    return "Bot is running 24/7!"
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    app_flask.run(host='0.0.0.0', port=port)
-
-# ==================== SETTINGS ====================
+# ==================== SETTINGS & CONFIG ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8879562109:AAEcmze51iluEkaLTPBjyy7qcUk7By6gQlQ")
-DATABASE_URL = os.environ.get("DATABASE_URL") # ដាក់ URL របស់ Render PostgreSQL ក្នុង Environment Variable
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-ADMIN_IDS = [8613183394]
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# Admin ដើមដំបូងគេបង្អស់ (Owner)
+OWNER_ID = 8613183394
 WAITING_BROADCAST_MSG = 1
 
 KEYWORDS_REPLY = {
     ("លេខទូរស័ព្ទ", "លេខ", "លេខទំនាក់ទំនង", "ចង់បើក"): "📞 **ទំនាក់ទំនង៖** 012 345 678 / 098 765 432",
     ("contact", "phone number", "number", "phone"): "📞 **Contact:** 012 345 678 / 098 765 432"
 }
+
+# ==================== FLASK WEB SERVER ====================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is alive!", 200
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
 
 # ==================== DATABASE (POSTGRESQL) ====================
 def get_db_connection():
@@ -46,6 +50,8 @@ def init_db():
         return
     conn = get_db_connection()
     cursor = conn.cursor()
+    
+    # Table សម្រាប់រក្សាទុក User ធម្មតា
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
@@ -57,6 +63,50 @@ def init_db():
             message_count INT DEFAULT 0
         )
     ''')
+    
+    # Table សម្រាប់រក្សាទុក Admin IDs
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS admins (
+            admin_id BIGINT PRIMARY KEY
+        )
+    ''')
+    
+    # បញ្ចូល Owner ID ចូល Database ស្វ័យប្រវត្តិ
+    cursor.execute('''
+        INSERT INTO admins (admin_id) VALUES (%s)
+        ON CONFLICT (admin_id) DO NOTHING
+    ''', (OWNER_ID,))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def get_admin_ids() -> list:
+    if not DATABASE_URL:
+        return [OWNER_ID]
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT admin_id FROM admins')
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return [row[0] for row in rows]
+    except Exception:
+        return [OWNER_ID]
+
+def add_admin_db(admin_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO admins (admin_id) VALUES (%s) ON CONFLICT DO NOTHING', (admin_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def remove_admin_db(admin_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM admins WHERE admin_id = %s', (admin_id,))
     conn.commit()
     cursor.close()
     conn.close()
@@ -65,7 +115,6 @@ def add_or_update_user(user_id, first_name, username):
     conn = get_db_connection()
     cursor = conn.cursor()
     now = datetime.now()
-    
     cursor.execute('''
         INSERT INTO users (user_id, first_name, username, is_replied, is_blocked, last_active, message_count)
         VALUES (%s, %s, %s, 0, 0, %s, 1)
@@ -75,7 +124,6 @@ def add_or_update_user(user_id, first_name, username):
             last_active = EXCLUDED.last_active,
             message_count = users.message_count + 1
     ''', (user_id, first_name, username, now))
-        
     conn.commit()
     cursor.close()
     conn.close()
@@ -134,19 +182,53 @@ def get_all_users():
 def get_stats():
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute('SELECT COUNT(*) FROM users')
     total_users = cursor.fetchone()[0]
-    
     cursor.execute("SELECT COUNT(*) FROM users WHERE last_active >= NOW() - INTERVAL '1 DAY'")
     active_24h = cursor.fetchone()[0]
-    
     cursor.execute('SELECT SUM(message_count) FROM users')
     total_messages = cursor.fetchone()[0] or 0
-    
     cursor.close()
     conn.close()
     return total_users, active_24h, total_messages
+
+# ==================== ADMIN MANAGEMENT COMMANDS ====================
+
+async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in get_admin_ids():
+        return
+    if context.args:
+        try:
+            new_admin_id = int(context.args[0])
+            add_admin_db(new_admin_id)
+            await update.message.reply_text(f"✅ **បានបន្ថែម Admin ថ្មីជោគជ័យ!**\nID: `{new_admin_id}`", parse_mode="Markdown")
+        except ValueError:
+            await update.message.reply_text("⚠️ **ទម្រង់ខុស!** ឧទាហរណ៍៖ `/addadmin 123456789`", parse_mode="Markdown")
+    else:
+        await update.message.reply_text("⚠️ **សូមបញ្ជាក់ ID!** ឧទាហរណ៍៖ `/addadmin 123456789`", parse_mode="Markdown")
+
+async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in get_admin_ids():
+        return
+    if context.args:
+        try:
+            target_id = int(context.args[0])
+            if target_id == OWNER_ID:
+                await update.message.reply_text("❌ មិនអាចលុប Owner ID បានទេ!")
+                return
+            remove_admin_db(target_id)
+            await update.message.reply_text(f"🗑️ **បានលុប Admin ID:** `{target_id}` រួចរាល់!", parse_mode="Markdown")
+        except ValueError:
+            await update.message.reply_text("⚠️ **ទម្រង់ខុស!** ឧទាហរណ៍៖ `/deladmin 123456789`", parse_mode="Markdown")
+    else:
+        await update.message.reply_text("⚠️ **សូមបញ្ជាក់ ID!** ឧទាហរណ៍៖ `/deladmin 123456789`", parse_mode="Markdown")
+
+async def list_admins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in get_admin_ids():
+        return
+    admins = get_admin_ids()
+    admin_list_text = "👑 **បញ្ជីឈ្មោះ Admin ទាំងអស់៖**\n" + "\n".join([f"• `{a}`" for a in admins])
+    await update.message.reply_text(admin_list_text, parse_mode="Markdown")
 
 # ==================== BOT HANDLERS ====================
 
@@ -157,22 +239,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     add_or_update_user(user.id, user.first_name, user.username)
 
-    if user.id in ADMIN_IDS:
+    if user.id in get_admin_ids():
         keyboard = [["📢 ផ្ញើសារប្រកាស (Broadcast)", "📊 ស្ថិតិប្រព័ន្ធ"]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         await update.message.reply_text(
-            f"👑 **សួស្តី Admin {user.first_name}!**",
+            f"👑 **សួស្តី Admin {user.first_name}!**\n\n"
+            f"💡 **បញ្ជាសម្រាប់គ្រប់គ្រង Admin:**\n"
+            f"• `/addadmin [ID]` - បន្ថែម Admin ថ្មី\n"
+            f"• `/deladmin [ID]` - លុប Admin\n"
+            f"• `/admins` - មើលបញ្ជី Admin",
             parse_mode="Markdown",
             reply_markup=reply_markup
         )
     else:
-        inline_keyboard = [
-            [
-                InlineKeyboardButton("📞 ទំនាក់ទំនង", callback_data="info_contact"),
-            ]
-        ]
+        inline_keyboard = [[InlineKeyboardButton("📞 ទំនាក់ទំនង", callback_data="info_contact")]]
         reply_markup = InlineKeyboardMarkup(inline_keyboard)
-
         welcome_text = f"👋 **ជម្រាបសួរ {user.first_name}!**\n\nសូមស្វាគមន៍មកកាន់ប្រព័ន្ធទំនាក់ទំនងរបស់យើងខ្ញុំ! 🤖"
         await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=reply_markup)
 
@@ -188,12 +269,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data.startswith("info_"):
         if query.data == "info_contact":
             text = "📞 **ព័ត៌មានទំនាក់ទំនង៖**\n• ទូរស័ព្ទ៖ 012 345 678 / 098 765 432\n• Telegram: @admin"
-        else:
-            return
-        await query.message.reply_text(text, parse_mode="Markdown")
+            await query.message.reply_text(text, parse_mode="Markdown")
 
     elif query.data.startswith("block_"):
-        if user_id not in ADMIN_IDS:
+        if user_id not in get_admin_ids():
             return
         target_id = int(query.data.split("_")[1])
         block_user_db(target_id)
@@ -203,9 +282,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
+    if update.effective_user.id not in get_admin_ids():
         return
-
     total_users, active_24h, total_messages = get_stats()
     stats_msg = (
         f"📊 **ស្ថិតិអ្នកប្រើប្រាស់ (Bot Statistics)**\n"
@@ -218,9 +296,8 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(stats_msg, parse_mode="Markdown")
 
 async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
+    if update.effective_user.id not in get_admin_ids():
         return
-
     if context.args:
         try:
             target_id = int(context.args[0])
@@ -228,13 +305,10 @@ async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"🚫 **បាន Block User ID:** `{target_id}` រួចរាល់!", parse_mode="Markdown")
         except ValueError:
             await update.message.reply_text("⚠️ **ទម្រង់ខុស!** ឧទាហរណ៍៖ `/block 123456789`", parse_mode="Markdown")
-    else:
-        await update.message.reply_text("⚠️ **សូមបញ្ជាក់ ID!** ឧទាហរណ៍៖ `/block 123456789`", parse_mode="Markdown")
 
 async def unblock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
+    if update.effective_user.id not in get_admin_ids():
         return
-
     if context.args:
         try:
             target_id = int(context.args[0])
@@ -242,17 +316,14 @@ async def unblock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ **បាន Unblock User ID:** `{target_id}` រួចរាល់!", parse_mode="Markdown")
         except ValueError:
             await update.message.reply_text("⚠️ **ទម្រង់ខុស!** ឧទាហរណ៍៖ `/unblock 123456789`", parse_mode="Markdown")
-    else:
-        await update.message.reply_text("⚠️ **សូមបញ្ជាក់ ID!** ឧទាហរណ៍៖ `/unblock 123456789`", parse_mode="Markdown")
 
 async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
+    if update.effective_user.id not in get_admin_ids():
         await update.message.reply_text("⚠️ មុខងារនេះសម្រាប់តែ Admin ប៉ុណ្ណោះ!", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
     keyboard = [[InlineKeyboardButton("❌ បោះបង់", callback_data="cancel_broadcast")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text(
         "📢 **សូមផ្ញើសារ/រូបភាព/វីដេអូ ដែលអ្នកចង់ Broadcast ទៅកាន់ User ទាំងអស់៖**",
         parse_mode="Markdown",
@@ -261,12 +332,11 @@ async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAITING_BROADCAST_MSG
 
 async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
+    if update.effective_user.id not in get_admin_ids():
         return ConversationHandler.END
 
     users = get_all_users()
     success_count, fail_count = 0, 0
-
     await update.message.reply_text(f"⏳ កំពុង Broadcast ទៅកាន់មនុស្ស {len(users)} នាក់...")
 
     for uid in users:
@@ -296,16 +366,14 @@ async def cancel_broadcast_callback(update: Update, context: ContextTypes.DEFAUL
 
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in ADMIN_IDS:
+    if user_id not in get_admin_ids():
         return False
 
     if update.message.reply_to_message:
         reply_to_text = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
-        
         if "🆔 ID:" in reply_to_text:
             try:
                 target_user_id = int(reply_to_text.split("🆔 ID:")[1].split("\n")[0].strip().replace("`", ""))
-
                 if update.message.text:
                     await context.bot.send_message(
                         chat_id=target_user_id,
@@ -318,7 +386,6 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         from_chat_id=update.effective_chat.id,
                         message_id=update.message.message_id
                     )
-
                 set_replied_status(target_user_id, True)
                 await update.message.reply_text("✅ បានផ្ញើតបទៅកាន់ User រួចរាល់!")
                 return True
@@ -333,7 +400,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if is_user_blocked(user.id):
         return
 
-    if user.id in ADMIN_IDS:
+    if user.id in get_admin_ids():
         if update.message.text == "📊 ស្ថិតិប្រព័ន្ធ":
             await show_stats(update, context)
             return
@@ -342,10 +409,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
     if update.message.text in ["📢 ផ្ញើសារប្រកាស (Broadcast)", "📊 ស្ថិតិប្រព័ន្ធ"]:
-        await update.message.reply_text(
-            "⚠️ មុខងារនេះសម្រាប់តែ Admin ប៉ុណ្ណោះ!",
-            reply_markup=ReplyKeyboardRemove()
-        )
+        await update.message.reply_text("⚠️ មុខងារនេះសម្រាប់តែ Admin ប៉ុណ្ណោះ!", reply_markup=ReplyKeyboardRemove())
         return
 
     add_or_update_user(user.id, user.first_name, user.username)
@@ -367,7 +431,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         [InlineKeyboardButton("🚫 Block User នេះ", callback_data=f"block_{user.id}")]
     ])
 
-    for admin_id in ADMIN_IDS:
+    for admin_id in get_admin_ids():
         try:
             if update.message.text:
                 combined_text = (
@@ -429,6 +493,9 @@ if __name__ == '__main__':
     bot_app.add_handler(CommandHandler("stats", show_stats))
     bot_app.add_handler(CommandHandler("block", block_command))
     bot_app.add_handler(CommandHandler("unblock", unblock_command))
+    bot_app.add_handler(CommandHandler("addadmin", add_admin_command))
+    bot_app.add_handler(CommandHandler("deladmin", remove_admin_command))
+    bot_app.add_handler(CommandHandler("admins", list_admins_command))
     bot_app.add_handler(broadcast_handler)
     bot_app.add_handler(CallbackQueryHandler(callback_handler))
     bot_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
